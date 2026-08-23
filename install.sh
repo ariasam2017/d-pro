@@ -115,10 +115,64 @@ random_admin_path(){
 
 DEPLOY_KEY="/root/.ssh/dotinschool_deploy"
 
+# "owner/repo" از REPO_URL (git@github.com:owner/repo.git) استخراج می‌کند —
+# برای صدا زدن GitHub API لازم است.
+repo_owner_name(){
+  local u="$REPO_URL"
+  u="${u#git@github.com:}"
+  u="${u%.git}"
+  echo "$u"
+}
+
+# نصب GitHub CLI (gh) اگر از قبل نباشد — فقط برای اضافه‌کردن خودکار Deploy
+# Key لازم است، هیچ اجباری نیست (اگر نصب نشود، مسیر دستی همچنان کار می‌کند).
+install_gh_cli(){
+  command -v gh >/dev/null 2>&1 && return 0
+  info "Installing GitHub CLI (gh)..."
+  local pm; pm=$(detect_pkg_manager)
+  case "$pm" in
+    apt)
+      mkdir -p -m 755 /etc/apt/keyrings
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg 2>/dev/null || return 1
+      chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+      apt-get update -y >/dev/null 2>&1
+      apt-get install -y gh >/dev/null 2>&1
+      ;;
+    dnf) dnf install -y 'dnf-command(config-manager)' >/dev/null 2>&1; dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo >/dev/null 2>&1; dnf install -y gh >/dev/null 2>&1 ;;
+    yum) yum-config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo >/dev/null 2>&1; yum install -y gh >/dev/null 2>&1 ;;
+  esac
+  command -v gh >/dev/null 2>&1
+}
+
+# لاگین دستگاهی (device flow) گیت‌هاب: یک کد و یک آدرس نشان داده می‌شود، کاربر
+# آن آدرس را با هر مرورگری (مثلاً گوشی‌اش، نه لزوماً همین سرور) باز می‌کند و
+# کد را وارد می‌کند — هیچ توکنی داخل خودِ اسکریپت نوشته نمی‌شود؛ gh آن را
+# موقتاً در کانفیگ خودش نگه می‌دارد و بلافاصله بعد از همین یک درخواست API،
+# logout انجام می‌شود تا چیزی روی دیسک سرور باقی نماند.
+try_auto_add_deploy_key(){
+  install_gh_cli || { warn "Could not install GitHub CLI — falling back to manual."; return 1; }
+  info "GitHub login — a one-time code and a URL will appear below; open the URL on any device (your phone works fine) and enter the code."
+  gh auth login --hostname github.com --git-protocol https --web || { warn "GitHub login was not completed."; return 1; }
+  local slug title
+  slug=$(repo_owner_name)
+  title="dotinschool-$(hostname 2>/dev/null || echo server)-$(date +%s)"
+  if gh api "repos/${slug}/keys" -f "title=${title}" -f "key=$(cat "${DEPLOY_KEY}.pub")" -F read_only=true >/dev/null 2>&1; then
+    ok "Deploy key added to ${slug} via GitHub API."
+    gh auth logout --hostname github.com --user "$(gh api user -q .login 2>/dev/null)" 2>/dev/null || true
+    return 0
+  else
+    warn "GitHub API rejected the request (maybe insufficient token scope)."
+    gh auth logout --hostname github.com --user "$(gh api user -q .login 2>/dev/null)" 2>/dev/null || true
+    return 1
+  fi
+}
+
 # این تابع خودِ نیازمندی (دسترسی SSH به ریپوی خصوصی) را پوشش می‌دهد — دیگر
 # لازم نیست کاربر قبل از اجرای دستور نصب، جدا کلید بسازد: اگر کلیدی نبود
-# همین‌جا ساخته می‌شود، کلید عمومی نشان داده می‌شود، و تا زمانی که کاربر آن
-# را به گیت‌هاب اضافه نکند و دسترسی واقعاً برقرار نشود، منتظر می‌ماند —
+# همین‌جا ساخته می‌شود، سپس تلاش می‌کند خودش (با لاگین گیت‌هاب) به ریپو
+# اضافه‌اش کند و با یک درخواست واقعی تأییدیه بگیرد؛ اگر این مسیر ممکن نبود
+# (کاربر انصراف داد یا gh نصب نشد)، کلید را نشان می‌دهد و دستی منتظر می‌ماند —
 # به‌جای شکست خوردن ناگهانی با خطای خام «Permission denied» گیت.
 ensure_deploy_key(){
   mkdir -p "$(dirname "$DEPLOY_KEY")"
@@ -131,7 +185,17 @@ ensure_deploy_key(){
   if git ls-remote "$REPO_URL" >/dev/null 2>&1; then
     return 0
   fi
+
   warn "This server's key is not yet authorized on the GitHub repository."
+  read -r -p "Add it automatically via GitHub login? [Y/n]: " autoadd
+  if [[ "$autoadd" != "n" && "$autoadd" != "N" ]]; then
+    if try_auto_add_deploy_key && git ls-remote "$REPO_URL" >/dev/null 2>&1; then
+      ok "Access to the repository confirmed."
+      return 0
+    fi
+    warn "Automatic setup didn't complete — switching to the manual method."
+  fi
+
   echo
   echo -e "${BOLD}Add this key as a Deploy Key:${NC} repo page on GitHub → Settings → Deploy keys → Add deploy key (read-only access is enough)"
   echo
