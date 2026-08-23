@@ -315,7 +315,18 @@ set_env_val(){
   fi
 }
 
-server_ip(){ curl -fsSL -4 https://api.ipify.org 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'; }
+# این تابع هیچ‌وقت نباید با کد غیرصفر خارج شود — چون بقیه‌ی اسکریپت زیر
+# «set -e» است، یک شکست ساکت اینجا (مثلاً اگر هم curl و هم fallback شکست
+# بخورند) کل اسکریپت را درست همین‌جا، بدون هیچ پیام خطایی، متوقف می‌کرد؛
+# دقیقاً همان چیزی که باعث می‌شد اطلاعات دسترسیِ پایانی هیچ‌وقت چاپ نشود.
+server_ip(){
+  local ip
+  ip=$(curl -fsSL -4 https://api.ipify.org 2>/dev/null) || true
+  if [[ -z "$ip" ]]; then
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
+  fi
+  echo "${ip:-<this-server-IP>}"
+}
 
 print_access_info(){
   local port scheme ip adminpath subdomain
