@@ -3,7 +3,7 @@
 # dotinschool — Linux installer/management script (x-ui/Sanaei-panel style)
 #
 # Install:
-#   bash <(curl -Ls https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh)
+#   bash <(curl -Ls https://raw.githubusercontent.com/ariasam2017/d-pro/main/install.sh)
 #
 # After install, the "dotinschool" management command is available:
 #   dotinschool            interactive management menu
