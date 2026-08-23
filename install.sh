@@ -36,6 +36,23 @@ warn(){ echo -e "${YELLOW}[!]${NC} $*"; }
 err(){ echo -e "${RED}[x]${NC} $*" >&2; }
 die(){ err "$*"; exit 1; }
 
+# جعبه‌ی منوی ترمینال، دقیقاً به سبک x-ui/Sanaei-panel (کاراکترهای کادر
+# ╔═║╚، شماره‌های سبز، عنوان‌های بخش جدا با خط‌چین). چون کدهای رنگ داخل
+# متن نامرئی‌اند ولی در طول رشته حساب می‌شوند، پدینگ همیشه از روی نسخه‌ی
+# بدون‌رنگ محاسبه می‌شود، نه از روی نسخه‌ی رنگی که چاپ می‌شود.
+BOX_WIDTH=54
+box_top(){ printf '╔'; printf '─%.0s' $(seq 1 $BOX_WIDTH); printf '╗\n'; }
+box_bottom(){ printf '╚'; printf '─%.0s' $(seq 1 $BOX_WIDTH); printf '╝\n'; }
+box_div(){ printf '│'; printf '─%.0s' $(seq 1 $BOX_WIDTH); printf '│\n'; }
+box_line(){
+  local plain="$1" colored="$2"
+  local pad=$((BOX_WIDTH - 2 - ${#plain}))
+  (( pad < 0 )) && pad=0
+  echo -e "│  ${colored}$(printf '%*s' "$pad" '')│"
+}
+box_title(){ box_line "$1" "${BOLD}${1}${NC}"; }
+box_item(){ box_line "${1}.  ${2}" "${GREEN}${1}.${NC}  ${2}"; }
+
 require_root(){
   [[ ${EUID:-$(id -u)} -eq 0 ]] || die "This script must be run as root (sudo bash install.sh)."
 }
@@ -413,14 +430,21 @@ cmd_uninstall(){
 cmd_admin(){
   require_root
   [[ -f "$ENV_FILE" ]] || die "Not installed yet."
-  echo "1) Show current access info (admin panel secret address + username/password)"
-  echo "2) Change username"
-  echo "3) Change password (random)"
-  echo "4) Change port"
-  echo "5) Change the admin panel's secret path (new random one — if it leaked)"
-  echo "6) Set/change the admin panel's dedicated subdomain (like a Sanaei panel)"
-  read -r -p "Choice: " choice
+  box_top
+  box_title "dotinschool — Admin Panel Settings"
+  box_item 0 "Back"
+  box_div
+  box_item 1 "Show Current Access Info"
+  box_item 2 "Change Username"
+  box_item 3 "Change Password (Random)"
+  box_item 4 "Change Port"
+  box_item 5 "Change Secret Path"
+  box_item 6 "Set Admin Subdomain"
+  box_bottom
+  echo
+  read -r -p "Please enter your selection [0-6]: " choice
   case "$choice" in
+    0) return ;;
     1) print_access_info ;;
     2) read -r -p "New username: " u; set_env_val ADMIN_USERNAME "$u"; systemctl restart "$SERVICE_NAME"; ok "Username changed."; print_access_info ;;
     3) local p; p=$(random_password); set_env_val ADMIN_PASSWORD "$p"; systemctl restart "$SERVICE_NAME"; ok "New password generated."; print_access_info ;;
@@ -509,38 +533,63 @@ cmd_service(){
   [[ "$1" == "status" ]] || ok "Command \"$1\" applied to the service."
 }
 
+# خط‌های وضعیت زنده زیر جعبه‌ی منو — دقیقاً همان چیزی که x-ui بعد از منو
+# نشان می‌دهد (Panel state / Start automatically)، اینجا با systemd.
+show_status(){
+  if ! [[ -f "$ENV_FILE" ]]; then
+    echo -e "Panel state: ${RED}Not Installed${NC}"
+    return
+  fi
+  if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    echo -e "Panel state: ${GREEN}Running${NC}"
+  else
+    echo -e "Panel state: ${YELLOW}Not Running${NC}"
+  fi
+  if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+    echo -e "Start automatically: ${GREEN}Yes${NC}"
+  else
+    echo -e "Start automatically: ${RED}No${NC}"
+  fi
+}
+
 show_menu(){
-  echo -e "${BOLD}=================================================${NC}"
-  echo -e "${BOLD}   dotinschool — management menu${NC}"
-  echo -e "${BOLD}=================================================${NC}"
-  echo " 1) Install"
-  echo " 2) Update to the latest version"
-  echo " 3) Show/change admin panel info"
-  echo " 4) Get an SSL certificate for a domain"
-  echo " 5) Start"
-  echo " 6) Stop"
-  echo " 7) Restart"
-  echo " 8) Service status"
-  echo " 9) Enable auto-start on boot"
-  echo "10) Disable auto-start"
-  echo "11) Uninstall completely"
-  echo " 0) Exit"
-  echo -e "${BOLD}=================================================${NC}"
-  read -r -p "Choice: " choice
+  box_top
+  box_title "dotinschool — Management Script"
+  box_item 0 "Exit"
+  box_div
+  box_item 1 "Install"
+  box_item 2 "Update to the Latest Version"
+  box_item 3 "Uninstall"
+  box_div
+  box_item 4 "Admin Panel Settings"
+  box_item 5 "SSL Certificate"
+  box_div
+  box_item 6 "Start"
+  box_item 7 "Stop"
+  box_item 8 "Restart"
+  box_item 9 "Status"
+  box_div
+  box_item 10 "Enable Autostart"
+  box_item 11 "Disable Autostart"
+  box_bottom
+  echo
+  show_status
+  echo
+  read -r -p "Please enter your selection [0-11]: " choice
   case "$choice" in
     1) cmd_install ;;
     2) cmd_update ;;
-    3) cmd_admin ;;
-    4) cmd_cert ;;
-    5) cmd_service start ;;
-    6) cmd_service stop ;;
-    7) cmd_service restart ;;
-    8) cmd_service status ;;
-    9) require_root; systemctl enable "$SERVICE_NAME" >/dev/null; ok "Auto-start enabled." ;;
-    10) require_root; systemctl disable "$SERVICE_NAME" >/dev/null; ok "Auto-start disabled." ;;
-    11) cmd_uninstall ;;
+    3) cmd_uninstall ;;
+    4) cmd_admin ;;
+    5) cmd_cert ;;
+    6) cmd_service start ;;
+    7) cmd_service stop ;;
+    8) cmd_service restart ;;
+    9) cmd_service status ;;
+    10) require_root; systemctl enable "$SERVICE_NAME" >/dev/null; ok "Auto-start enabled." ;;
+    11) require_root; systemctl disable "$SERVICE_NAME" >/dev/null; ok "Auto-start disabled." ;;
     0) exit 0 ;;
-    *) warn "Invalid option." ;;
+    *) warn "Please enter a number between 0 and 11." ;;
   esac
 }
 
