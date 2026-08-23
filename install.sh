@@ -113,6 +113,23 @@ random_admin_path(){
   echo "panel-$(openssl rand -hex 6)"
 }
 
+# با اتصال TCP به 127.0.0.1:PORT تشخیص می‌دهد پورت اشغال است یا نه — به جای
+# اتکا به ابزارهایی مثل ss/lsof که ممکن است روی هر توزیعی از قبل نصب نباشند،
+# از قابلیت شبکه‌ی خودِ bash (/dev/tcp) استفاده می‌کند که همیشه در دسترس است.
+port_in_use(){
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3<&- 2>/dev/null; exec 3>&- 2>/dev/null; return 0; }
+  return 1
+}
+find_free_port(){
+  local port="$1" tries=0
+  while port_in_use "$port"; do
+    port=$((port + 1))
+    tries=$((tries + 1))
+    [[ $tries -lt 50 ]] || { echo "$1"; return; }  # too many tries — give up, caller decides what to do
+  done
+  echo "$port"
+}
+
 DEPLOY_KEY="/root/.ssh/dotinschool_deploy"
 
 # "owner/repo" از REPO_URL (git@github.com:owner/repo.git) استخراج می‌کند —
@@ -228,12 +245,14 @@ write_env_file(){
   # password/port is never overwritten)
   mkdir -p "$CONFIG_DIR"
   if [[ ! -f "$ENV_FILE" ]]; then
-    local pass adminpath
+    local pass adminpath port
     pass=$(random_password)
     adminpath=$(random_admin_path)
+    port=$(find_free_port 8080)
+    [[ "$port" == "8080" ]] || warn "Port 8080 was already in use on this server — using ${port} instead."
     cat > "$ENV_FILE" <<EOF
 # dotinschool service configuration — edit via "dotinschool admin" or "dotinschool cert"
-PORT=8080
+PORT=${port}
 DATA_DIR=${INSTALL_DIR}/data
 ADMIN_USERNAME=administrator
 ADMIN_PASSWORD=${pass}
@@ -329,6 +348,25 @@ cmd_install(){
   systemctl enable "$SERVICE_NAME" >/dev/null 2>&1
   systemctl restart "$SERVICE_NAME"
   sleep 1
+  # اگر پورت فعلی (چه ۸۰۸۰ پیش‌فرض، چه پورتی که خودِ کاربر قبلاً تنظیم کرده)
+  # اشغال شده باشد، سرویس دقیقاً با همین خطا بالا نمی‌آید — به‌جای توقف با
+  # یک لاگ خام، خودش یک پورت آزاد پیدا می‌کند، تنظیمات را عوض می‌کند و
+  # دوباره امتحان می‌کند (حداکثر چند بار)، قبل از اینکه واقعاً تسلیم شود.
+  local tries=0
+  while ! systemctl is-active --quiet "$SERVICE_NAME" && [[ $tries -lt 5 ]]; do
+    if journalctl -u "$SERVICE_NAME" --no-pager -n 20 2>/dev/null | grep -q "EADDRINUSE"; then
+      local oldport newport
+      oldport=$(get_env_val PORT)
+      newport=$(find_free_port $((oldport + 1)))
+      warn "Port ${oldport} is in use by something else on this server — switching to ${newport}."
+      set_env_val PORT "$newport"
+      systemctl restart "$SERVICE_NAME"
+      sleep 1
+      tries=$((tries + 1))
+    else
+      break
+    fi
+  done
   open_firewall_port "$(get_env_val PORT)"
   if systemctl is-active --quiet "$SERVICE_NAME"; then
     ok "Installation complete and the service is running."
