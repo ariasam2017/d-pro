@@ -49,11 +49,11 @@ detect_pkg_manager(){
 
 install_prereqs(){
   local pm; pm=$(detect_pkg_manager)
-  info "Installing prerequisites (curl, git, tar, openssl)..."
+  info "Installing prerequisites (curl, git, tar, openssl, ssh)..."
   case "$pm" in
-    apt) apt-get update -y >/dev/null; apt-get install -y curl git tar openssl ca-certificates >/dev/null ;;
-    dnf) dnf install -y curl git tar openssl ca-certificates >/dev/null ;;
-    yum) yum install -y curl git tar openssl ca-certificates >/dev/null ;;
+    apt) apt-get update -y >/dev/null; apt-get install -y curl git tar openssl openssh-client ca-certificates >/dev/null ;;
+    dnf) dnf install -y curl git tar openssl openssh-clients ca-certificates >/dev/null ;;
+    yum) yum install -y curl git tar openssl openssh-clients ca-certificates >/dev/null ;;
   esac
   ok "Prerequisites ready."
 }
@@ -115,14 +115,38 @@ random_admin_path(){
 
 DEPLOY_KEY="/root/.ssh/dotinschool_deploy"
 
+# این تابع خودِ نیازمندی (دسترسی SSH به ریپوی خصوصی) را پوشش می‌دهد — دیگر
+# لازم نیست کاربر قبل از اجرای دستور نصب، جدا کلید بسازد: اگر کلیدی نبود
+# همین‌جا ساخته می‌شود، کلید عمومی نشان داده می‌شود، و تا زمانی که کاربر آن
+# را به گیت‌هاب اضافه نکند و دسترسی واقعاً برقرار نشود، منتظر می‌ماند —
+# به‌جای شکست خوردن ناگهانی با خطای خام «Permission denied» گیت.
+ensure_deploy_key(){
+  mkdir -p "$(dirname "$DEPLOY_KEY")"
+  if [[ ! -f "$DEPLOY_KEY" ]]; then
+    info "No deploy key found on this server — generating one..."
+    ssh-keygen -t ed25519 -f "$DEPLOY_KEY" -N "" -q
+    ok "Deploy key generated."
+  fi
+  export GIT_SSH_COMMAND="ssh -i ${DEPLOY_KEY} -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+  if git ls-remote "$REPO_URL" >/dev/null 2>&1; then
+    return 0
+  fi
+  warn "This server's key is not yet authorized on the GitHub repository."
+  echo
+  echo -e "${BOLD}Add this key as a Deploy Key:${NC} repo page on GitHub → Settings → Deploy keys → Add deploy key (read-only access is enough)"
+  echo
+  echo -e "${CYAN}$(cat "${DEPLOY_KEY}.pub")${NC}"
+  echo
+  while ! git ls-remote "$REPO_URL" >/dev/null 2>&1; do
+    read -r -p "Press Enter after adding the key above to retry (Ctrl+C to abort)... " _
+    if git ls-remote "$REPO_URL" >/dev/null 2>&1; then break; fi
+    warn "Still can't access the repository — double-check the key was pasted in full, then try again."
+  done
+  ok "Access to the repository confirmed."
+}
+
 fetch_app(){
-  # The repo is private: cloning over SSH needs a Deploy Key. If you created
-  # the key at this exact path (per the README), it's auto-detected and used
-  # here — no need to edit ~/.ssh/config. StrictHostKeyChecking also avoids
-  # getting stuck on a host-key confirmation prompt during non-interactive runs.
-  local identity_opt=""
-  [[ -f "$DEPLOY_KEY" ]] && identity_opt="-i $DEPLOY_KEY"
-  export GIT_SSH_COMMAND="ssh $identity_opt -o StrictHostKeyChecking=accept-new"
+  ensure_deploy_key
   if [[ -d "$INSTALL_DIR/.git" ]]; then
     info "Updating source from ${REPO_URL} (${BRANCH})..."
     git -C "$INSTALL_DIR" fetch --depth 1 origin "$BRANCH" >/dev/null
