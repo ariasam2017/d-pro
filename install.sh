@@ -8,7 +8,8 @@
 # After install, the "dotinschool" management command is available:
 #   dotinschool            interactive management menu
 #   dotinschool install    install / reinstall
-#   dotinschool update     update to the latest version from GitHub
+#   dotinschool update     update the app to the latest version from GitHub
+#   dotinschool update-menu   update just this CLI script from the public repo
 #   dotinschool admin      show/change admin panel address, credentials, and subdomain
 #   dotinschool cert       issue/renew an SSL certificate for a domain
 #   dotinschool start|stop|restart|status
@@ -19,6 +20,9 @@ set -euo pipefail
 
 REPO_URL="${DOTINSCHOOL_REPO_URL:-git@github.com:ariasam2017/dtnschool.git}"
 BRANCH="${DOTINSCHOOL_BRANCH:-main}"
+# آدرس عمومی همین اسکریپت (install.sh) — برای «Update Menu»، تا فقط خودِ
+# اسکریپت مدیریتی را از این ریپوی عمومی (نه سورس اصلی که خصوصی است) بگیرد.
+CLI_SOURCE_URL="${DOTINSCHOOL_CLI_SOURCE_URL:-https://raw.githubusercontent.com/ariasam2017/d-pro/main/install.sh}"
 
 INSTALL_DIR="/opt/dotinschool"
 CONFIG_DIR="/etc/dotinschool"
@@ -409,10 +413,39 @@ cmd_install(){
 cmd_update(){
   require_root
   [[ -d "$INSTALL_DIR" ]] || die "Not installed yet — run \"dotinschool install\" first."
+  local before after
+  before=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || echo "")
   fetch_app
+  after=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || echo "")
   install_cli
+  # git reset --hard فقط فایل‌های ردیابی‌شده را جابه‌جا می‌کند؛ data/ در
+  # .gitignore است، پس شرکت‌کنندگان/امتیازها/کدهای ارسالی دست‌نخورده می‌مانند.
+  if [[ -n "$before" && "$before" == "$after" ]]; then
+    ok "Already up to date — no new version on GitHub, nothing changed."
+    return
+  fi
   systemctl restart "$SERVICE_NAME"
   ok "Update complete and the service was restarted."
+}
+
+# فقط خودِ اسکریپت مدیریتی (install.sh) را از ریپوی عمومی می‌گیرد — بدون
+# نیاز به Deploy Key، و بدون هیچ اثری روی سورس نصب‌شده یا داده‌ها. برای
+# وقتی که فقط خودِ CLI نیاز به تازه‌شدن دارد (شبیه «Update Menu» در x-ui).
+cmd_update_menu(){
+  require_root
+  info "Fetching the latest management script from GitHub..."
+  local tmp; tmp=$(mktemp)
+  if ! curl -fsSL "$CLI_SOURCE_URL" -o "$tmp"; then
+    rm -f "$tmp"
+    die "Could not download the latest script — check this server's internet connection."
+  fi
+  if ! bash -n "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    die "The downloaded script failed a syntax check — aborting, nothing was changed."
+  fi
+  install -m 755 "$tmp" "$CLI_PATH"
+  rm -f "$tmp"
+  ok "Management script updated to the latest version."
 }
 
 cmd_uninstall(){
@@ -559,37 +592,39 @@ show_menu(){
   box_div
   box_item 1 "Install"
   box_item 2 "Update to the Latest Version"
-  box_item 3 "Uninstall"
+  box_item 3 "Update Menu"
+  box_item 4 "Uninstall"
   box_div
-  box_item 4 "Admin Panel Settings"
-  box_item 5 "SSL Certificate"
+  box_item 5 "Admin Panel Settings"
+  box_item 6 "SSL Certificate"
   box_div
-  box_item 6 "Start"
-  box_item 7 "Stop"
-  box_item 8 "Restart"
-  box_item 9 "Status"
+  box_item 7 "Start"
+  box_item 8 "Stop"
+  box_item 9 "Restart"
+  box_item 10 "Status"
   box_div
-  box_item 10 "Enable Autostart"
-  box_item 11 "Disable Autostart"
+  box_item 11 "Enable Autostart"
+  box_item 12 "Disable Autostart"
   box_bottom
   echo
   show_status
   echo
-  read -r -p "Please enter your selection [0-11]: " choice
+  read -r -p "Please enter your selection [0-12]: " choice
   case "$choice" in
     1) cmd_install ;;
     2) cmd_update ;;
-    3) cmd_uninstall ;;
-    4) cmd_admin ;;
-    5) cmd_cert ;;
-    6) cmd_service start ;;
-    7) cmd_service stop ;;
-    8) cmd_service restart ;;
-    9) cmd_service status ;;
-    10) require_root; systemctl enable "$SERVICE_NAME" >/dev/null; ok "Auto-start enabled." ;;
-    11) require_root; systemctl disable "$SERVICE_NAME" >/dev/null; ok "Auto-start disabled." ;;
+    3) cmd_update_menu ;;
+    4) cmd_uninstall ;;
+    5) cmd_admin ;;
+    6) cmd_cert ;;
+    7) cmd_service start ;;
+    8) cmd_service stop ;;
+    9) cmd_service restart ;;
+    10) cmd_service status ;;
+    11) require_root; systemctl enable "$SERVICE_NAME" >/dev/null; ok "Auto-start enabled." ;;
+    12) require_root; systemctl disable "$SERVICE_NAME" >/dev/null; ok "Auto-start disabled." ;;
     0) exit 0 ;;
-    *) warn "Please enter a number between 0 and 11." ;;
+    *) warn "Please enter a number between 0 and 12." ;;
   esac
 }
 
@@ -597,6 +632,7 @@ main(){
   case "${1:-}" in
     install) cmd_install ;;
     update) cmd_update ;;
+    update-menu) cmd_update_menu ;;
     uninstall) cmd_uninstall ;;
     admin) cmd_admin ;;
     cert) cmd_cert ;;
