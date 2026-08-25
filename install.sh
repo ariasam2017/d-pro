@@ -125,8 +125,14 @@ install_node(){
 }
 
 random_password(){
-  # secure random password — the hardcoded default password is never used
-  openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 20
+  # secure random password — the hardcoded default password is never used.
+  # همه‌جا با انتساب مستقیم صدا زده می‌شود (نه داخل if/||)، پس زیر «set -e»
+  # باید یا واقعاً موفق شود یا با پیام روشن بمیرد — نه بی‌صدا کل اسکریپت را
+  # با یک رمز خالی/ناقص متوقف کند.
+  local p
+  p=$(openssl rand -base64 18 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c 20) || true
+  [[ -n "$p" ]] || die "Could not generate a random password (is openssl working on this system?)."
+  echo "$p"
 }
 random_admin_path(){
   # random, unguessable path for the admin panel (e.g. panel-9f3a7c1d) instead
@@ -326,7 +332,13 @@ install_cli(){
   ok "The \"dotinschool\" management command was installed."
 }
 
-get_env_val(){ grep -E "^${1}=" "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2-; }
+# با «set -o pipefail»، اگر grep چیزی پیدا نکند (خروجی غیرصفر) کل پایپ‌لاین
+# غیرصفر گزارش می‌شود حتی اگر tail/cut موفق باشند — و چون این تابع معمولاً
+# مستقیم در یک انتساب («x=$(get_env_val ...)») صدا زده می‌شود، زیر «set -e»
+# دقیقاً همین‌جا کل اسکریپت را بی‌صدا متوقف می‌کرد (مثلاً برای کلیدهای
+# اختیاری مثل ADMIN_SUBDOMAIN که در نصب پیش‌فرض اصلاً در فایل نیستند). «||
+# true» تضمین می‌کند نبودن یک کلید فقط رشته‌ی خالی برمی‌گرداند، نه شکست اسکریپت.
+get_env_val(){ grep -E "^${1}=" "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- || true; }
 set_env_val(){
   local key="$1" val="$2"
   if grep -qE "^${key}=" "$ENV_FILE" 2>/dev/null; then
